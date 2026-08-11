@@ -31,8 +31,9 @@ the PHP MAPI bindings.
 Shared-mailbox impersonation uses the
 impersonated-user!auth-user@domain.com login form.
 
-This package ships a dedicated php-fpm instance (php-fpm@grommunio-sync)
-and an nginx snippet in /etc/nginx/grommunio.d/. Enable the instance
+This package ships a dedicated php-fpm instance (php-fpm@grommunio-sync),
+a dedicated Redis instance (redis@grommunio-sync — not redis@grommunio),
+and an nginx snippet in /etc/nginx/grommunio.d/. Enable the fpm instance
 and reload nginx after install.
 
 %prep
@@ -51,6 +52,8 @@ EOF
 # Config in /etc, linked into the app tree
 mkdir -p %{buildroot}%{_sysconfdir}/%{name}
 sed -e "s|define('MAPI_SERVER', 'default:');|define('MAPI_SERVER', 'unix:/run/gromox/zcore.sock');|" \
+    -e "s|define('REDIS_HOST', 'localhost');|define('REDIS_HOST', '/run/redis/grommunio-sync/redis.sock');|" \
+    -e "s|define('REDIS_PORT', 6379);|define('REDIS_PORT', 0);|" \
 	config.php >%{buildroot}%{_sysconfdir}/%{name}/config.php
 ln -s %{_sysconfdir}/%{name}/config.php %{buildroot}%{_datadir}/%{name}/config.php
 
@@ -100,7 +103,7 @@ pm.max_spare_servers=12
 request_terminate_timeout=3660s
 
 env[GROMOX_CONFIG_DIR]=/etc/gromox
-php_admin_value[open_basedir]=/usr/share/grommunio-sync:/etc/grommunio-sync:/var/log/grommunio-sync:/etc/gromox:/usr/share/php-mapi:/usr/share/php:/run/gromox
+php_admin_value[open_basedir]=/usr/share/grommunio-sync:/etc/grommunio-sync:/var/log/grommunio-sync:/etc/gromox:/usr/share/php-mapi:/usr/share/php:/run/gromox:/run/redis/grommunio-sync
 php_admin_value[opcache.enable]=0
 php_admin_value[opcache.jit]=0
 php_admin_value[mapi.zcore_socket]=/run/gromox/zcore.sock
@@ -128,6 +131,46 @@ upload_max_filesize=100M";
 }
 EOF
 
+# Dedicated Redis instance. grommunio-sync only uses Redis for its own
+# IPC / top / device cache; admin-api reads those same keys for
+# "sync top". This is not redis@grommunio.
+install -d %{buildroot}%{_sysconfdir}/redis
+cat >%{buildroot}%{_sysconfdir}/redis/grommunio-sync.conf <<'EOF'
+# redis@grommunio-sync — per-application instance for grommunio-sync
+bind 127.0.0.1 -::1
+protected-mode yes
+port 0
+unixsocket /run/redis/grommunio-sync/redis.sock
+unixsocketperm 666
+pidfile /run/redis/grommunio-sync.pid
+dir /srv/redis/grommunio-sync
+dbfilename dump.rdb
+logfile ""
+loglevel notice
+daemonize no
+supervised systemd
+timeout 0
+tcp-keepalive 300
+EOF
+
+# Start redis with the fpm instance, and at boot
+install -d %{buildroot}%{_unitdir}/php-fpm@grommunio-sync.service.d
+cat >%{buildroot}%{_unitdir}/php-fpm@grommunio-sync.service.d/redis.conf <<'EOF'
+[Unit]
+Wants=redis@grommunio-sync.service
+After=redis@grommunio-sync.service
+EOF
+install -d %{buildroot}%{_unitdir}/multi-user.target.wants
+ln -s ../redis@.service %{buildroot}%{_unitdir}/multi-user.target.wants/redis@grommunio-sync.service
+
+# Point admin-api at the same instance so /system/sync/top works
+install -d %{buildroot}%{_sysconfdir}/grommunio-admin-api/conf.d
+cat >%{buildroot}%{_sysconfdir}/grommunio-admin-api/conf.d/sync-redis.yaml <<'EOF'
+sync:
+  connection:
+    unix_socket_path: /run/redis/grommunio-sync/redis.sock
+EOF
+
 %files
 %{_datadir}/%{name}
 %dir %{_sysconfdir}/%{name}
@@ -137,4 +180,10 @@ EOF
 %config(noreplace) %{_sysconfdir}/php-fpm-instances.d/grommunio-sync.conf
 %config(noreplace) %{_sysconfdir}/php-fpm-instances.d/grommunio-sync.env
 %config(noreplace) %{_sysconfdir}/nginx/grommunio.d/sync.conf
+%config(noreplace) %attr(0640,root,redis) %{_sysconfdir}/redis/grommunio-sync.conf
+%{_unitdir}/php-fpm@grommunio-sync.service.d
+%{_unitdir}/multi-user.target.wants/redis@grommunio-sync.service
+%dir %{_sysconfdir}/grommunio-admin-api
+%dir %{_sysconfdir}/grommunio-admin-api/conf.d
+%config(noreplace) %{_sysconfdir}/grommunio-admin-api/conf.d/sync-redis.yaml
 %dir %attr(0770,www,www) %{_localstatedir}/log/%{name}
