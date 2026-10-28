@@ -1,7 +1,7 @@
 Name:		grommunio-sync
-Version:	2.5
+Version:	2.7
 Release:	1
-Source0:	https://github.com/grommunio/grommunio-sync/releases/download/%{version}/grommunio-sync-%{version}.tar.zst
+Source0:	https://github.com/grommunio/grommunio-sync/archive/refs/tags/%{version}.tar.gz#/grommunio-sync-%{version}.tar.gz
 Summary:	Exchange ActiveSync interface for grommunio
 URL:		https://github.com/grommunio/grommunio-sync
 License:	AGPL-3.0
@@ -18,7 +18,7 @@ Requires:	php-pdo
 Requires:	php-posix
 Requires:	php-soap
 Requires:	php-redis
-Requires:	grommunio-mapi-header-php
+Requires:	grommunio-mapi-header-php >= 2.4
 Requires:	gromox
 Requires:	redis
 Requires:	nginx
